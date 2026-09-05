@@ -1,0 +1,11 @@
+PENGUIN FRONTEND
+
+1. Extract this ZIP.
+2. Open PowerShell in the folder containing package.json.
+3. Run: npm install
+4. Run: npm run dev
+5. Open the localhost URL Vite prints.
+
+IMPORTANT: Do not type package.json, index.html, or folder-tree symbols as commands.
+
+This build fixes the blank-screen crash in the previous package. DemoControls now accepts the props App actually passes. A React error boundary is also included so runtime errors are shown on-screen instead of leaving a blank page.
