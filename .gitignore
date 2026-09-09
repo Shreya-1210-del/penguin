@@ -1,0 +1,6 @@
+intelligence-service/.venv/
+intelligence-service/venv/
+intelligence-service/__pycache__/
+intelligence-service/**/__pycache__/
+*.pyc
+.env
