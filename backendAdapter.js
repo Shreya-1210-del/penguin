@@ -42,7 +42,15 @@ export async function fetchTelemetry(endpoint, options) {
   return normalizeTelemetry(data);
 }
 
-export const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL || "").replace(/\/$/, "");
+export const BACKEND_URL =
+  (
+    import.meta.env.VITE_BACKEND_URL ||
+    import.meta.env.VITE_API_URL ||
+    ""
+  ).replace(/\/$/, "");
+
+export const API_BASE = BACKEND_URL;
+export const TELEMETRY_URL = BACKEND_URL ? `${BACKEND_URL}/api/telemetry` : "/api/telemetry";
 export const BACKEND_SSE_URL = BACKEND_URL ? `${BACKEND_URL}/api/telemetry/stream` : "/api/telemetry/stream";
 
 export function createSSETelemetry(url, onMessage, onError = () => { }) {
