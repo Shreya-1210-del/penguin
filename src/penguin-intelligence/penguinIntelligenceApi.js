@@ -1,5 +1,5 @@
-const rawApi = import.meta.env.VITE_PENGUIN_API_URL || import.meta.env.VITE_INTELLIGENCE_API_URL || "";
-const API = rawApi ? rawApi.replace(/\/$/, "") : "";
+const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const API = API_BASE.replace(/\/$/, "");
 
 async function request(path, options = {}) {
   let response;
