@@ -206,48 +206,43 @@ function recalculatePhysics() {
 
 /**
  * Activates a blizzard: shifts OU mean to -55 °C and sets activeScenarios.blizzard = true.
+ * The OU process in tick() will gradually and smoothly pull temperature toward -55 °C.
  */
 function startBlizzard() {
   state.activeScenarios.blizzard = true;
   state.currentMeanTemp = -55;
-  state.ambientTemp = -55;
-  recalculatePhysics();
   state.lastUpdated = new Date().toISOString();
   notifyListeners();
 }
 
 /**
  * Stops the blizzard: restores OU mean to -20 °C and sets activeScenarios.blizzard = false.
- * Fuel is preserved.
+ * The OU process in tick() will gradually and smoothly pull temperature back to baseline.
  */
 function stopBlizzard() {
   state.activeScenarios.blizzard = false;
   state.currentMeanTemp = OU_MU_BASE_C;
-  state.ambientTemp = OU_MU_BASE_C;
-  recalculatePhysics();
   state.lastUpdated = new Date().toISOString();
   notifyListeners();
 }
 
 /**
- * Activates generator failure: applies 1.5× burn-rate multiplier and sets activeScenarios.generatorFailure = true.
+ * Activates generator failure: sets generatorFailureActive = true.
+ * Burn rate will reflect the 1.5x multiplier on the subsequent simulation tick.
  */
 function startGeneratorFailure() {
   state.activeScenarios.generatorFailure = true;
   state.generatorFailureActive = true;
-  recalculatePhysics();
   state.lastUpdated = new Date().toISOString();
   notifyListeners();
 }
 
 /**
  * Repairs the generator: clears failure multiplier and sets activeScenarios.generatorFailure = false.
- * Fuel is preserved.
  */
 function repairGenerator() {
   state.activeScenarios.generatorFailure = false;
   state.generatorFailureActive = false;
-  recalculatePhysics();
   state.lastUpdated = new Date().toISOString();
   notifyListeners();
 }
