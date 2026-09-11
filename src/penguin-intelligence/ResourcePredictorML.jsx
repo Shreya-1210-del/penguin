@@ -109,16 +109,20 @@ export default function ResourcePredictorML({ engine }) {
   const [error, setError] = useState("");
   const reqIdRef = useRef(0);
 
+  // Coarsen rounding so 2-second telemetry jitter doesn't retrigger ML predictions.
+  // power → nearest 50, fuel → nearest 5%, temp → nearest 5°C.
   const payload = useMemo(() => ({
     ...controls,
-    ambient_temp_c: Math.round(Number(engine?.ambientTemp ?? controls.ambient_temp_c)),
-    power_load_kw: Math.round(Number(engine?.powerLoadKW ?? controls.power_load_kw) / 10) * 10,
+    ambient_temp_c: Math.round(Number(engine?.ambientTemp ?? controls.ambient_temp_c) / 5) * 5,
+    power_load_kw: Math.round(Number(engine?.powerLoadKW ?? controls.power_load_kw) / 50) * 50,
     fuel_percent: Math.round(Number(
       engine?.currentFuel ? (engine.currentFuel / (engine.fuelTankCapacity || 120000)) * 100 : controls.fuel_percent
-    )),
+    ) / 5) * 5,
     scenario: engine?.scenario || controls.scenario,
   }), [controls, engine]);
 
+  // 2000ms debounce: telemetry ticks every 2s, so 350ms provided no meaningful coalescing
+  // and was producing ~4 ML requests per tick (100+ req/min), saturating browser connection pool.
   const debouncedRun = useRef(debounce(async (p, id, setters) => {
     const { setPrediction, setCompare, setForecastData, setRecommendation, setLoading, setError, isCurrent } = setters;
     setLoading(true); setError("");
@@ -138,7 +142,7 @@ export default function ResourcePredictorML({ engine }) {
     } finally {
       if (isCurrent(id)) setLoading(false);
     }
-  }, 350));
+  }, 2000));
 
   useEffect(() => { getModelInfo().then(setModelInfo).catch(() => {}); }, []);
 

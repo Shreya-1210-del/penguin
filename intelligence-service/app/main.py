@@ -143,7 +143,11 @@ async def security_and_rate_limit_middleware(request: Request, call_next):
                 _client_requests.pop(k, None)
 
     try:
+        start_time = time.time()
         response: Response = await call_next(request)
+        process_time = time.time() - start_time
+        if request.url.path.startswith("/api/ml/"):
+            logger.info("ML_ENDPOINT_TIMING %s completed in %.3fs", request.url.path, process_time)
     except Exception as exc:
         logger.error("Unhandled error in request pipeline (%s): %s", request.url.path, exc, exc_info=True)
         return JSONResponse(
@@ -226,12 +230,15 @@ def _resolved_burn(req: PredictRequest) -> tuple[float, int, float]:
     return burn, generators, severity
 
 
-def predict_payload(req: PredictRequest) -> dict[str, Any]:
+def predict_payload(req: PredictRequest, normal_baseline: dict[str, float] | None = None) -> dict[str, Any]:
     features = _feature_row(req)
     prediction = engine.predict(features)
 
-    normal_features = _feature_row(req, active_generators=req.total_generators, blizzard_severity=0.0, scenario="NORMAL")
-    normal_req = engine.predict(normal_features)
+    if normal_baseline is None:
+        normal_features = _feature_row(req, active_generators=req.total_generators, blizzard_severity=0.0, scenario="NORMAL")
+        normal_req = engine.predict(normal_features)
+    else:
+        normal_req = normal_baseline
 
     buffered = {k: v * (1 + req.safety_buffer_percent / 100) for k, v in prediction.items()}
     extra = {k: max(0.0, prediction[k] - normal_req[k]) for k in prediction}
@@ -398,13 +405,19 @@ def predict_resources(req: PredictRequest) -> dict[str, Any]:
 @app.post("/api/ml/scenario-compare")
 def scenario_compare(req: PredictRequest) -> dict[str, Any]:
     results = {}
-    normal_result = None
+    
+    # Pre-compute NORMAL baseline once
+    normal_clone = req.model_copy(update={"scenario": "NORMAL", "active_generators": None, "blizzard_severity": None})
+    normal_result = predict_payload(normal_clone)
+    results["NORMAL"] = normal_result
+    normal_baseline = normal_result["prediction"]
+
     for scenario in physics.SCENARIOS:
-        clone = req.model_copy(update={"scenario": scenario, "active_generators": None, "blizzard_severity": None})
-        payload = predict_payload(clone)
-        results[scenario] = payload
         if scenario == "NORMAL":
-            normal_result = payload
+            continue
+        clone = req.model_copy(update={"scenario": scenario, "active_generators": None, "blizzard_severity": None})
+        payload = predict_payload(clone, normal_baseline=normal_baseline)
+        results[scenario] = payload
 
     deltas = {}
     for scenario, payload in results.items():
@@ -429,7 +442,7 @@ def scenario_compare(req: PredictRequest) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 @app.post("/api/ml/forecast")
-def forecast(req: PredictRequest) -> dict[str, Any]:
+async def forecast(req: PredictRequest) -> dict[str, Any]:
     """Day-by-day reserve/consumption/risk projection over the planning horizon,
     for the reserve-over-time, consumption-over-time, and risk-over-time charts."""
     burn, generators, severity = _resolved_burn(req)
@@ -468,12 +481,21 @@ def forecast(req: PredictRequest) -> dict[str, Any]:
 
 @app.post("/api/ml/recommend")
 def recommend(req: PredictRequest) -> dict[str, Any]:
-    payload = predict_payload(req)
+    # Compute normal baseline first if the request isn't already NORMAL
+    if req.scenario == "NORMAL":
+        normal_payload = predict_payload(req)
+        payload = normal_payload
+    else:
+        normal_clone = req.model_copy(update={"scenario": "NORMAL", "active_generators": None, "blizzard_severity": None})
+        normal_payload = predict_payload(normal_clone)
+        payload = predict_payload(req, normal_baseline=normal_payload["prediction"])
 
-    gen_failure_clone = req.model_copy(update={"scenario": "GENERATOR_FAILURE", "active_generators": None, "blizzard_severity": None})
-    gen_failure_payload = predict_payload(gen_failure_clone)
-    normal_clone = req.model_copy(update={"scenario": "NORMAL", "active_generators": None, "blizzard_severity": None})
-    normal_payload = predict_payload(normal_clone)
+    # Pass the normal_baseline to generator failure prediction to save computation
+    if req.scenario == "GENERATOR_FAILURE":
+        gen_failure_payload = payload
+    else:
+        gen_failure_clone = req.model_copy(update={"scenario": "GENERATOR_FAILURE", "active_generators": None, "blizzard_severity": None})
+        gen_failure_payload = predict_payload(gen_failure_clone, normal_baseline=normal_payload["prediction"])
 
     base_diesel = normal_payload["prediction"]["diesel_liters"]
     gen_failure_pct = round(100 * (gen_failure_payload["prediction"]["diesel_liters"] - base_diesel) / base_diesel, 1) if base_diesel else 0.0

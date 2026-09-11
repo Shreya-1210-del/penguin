@@ -150,7 +150,8 @@ class ResourceIntelligenceEngine:
                 max_depth=16,
                 min_samples_leaf=3,
                 random_state=seed,
-                n_jobs=-1,
+                # Explicitly single-threaded for fast single-row inference in a web server
+                n_jobs=1,
             )
             model.fit(X[train_idx], y[train_idx])
             pred = model.predict(X[test_idx])
