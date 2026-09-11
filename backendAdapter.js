@@ -15,7 +15,7 @@ export function normalizeTelemetry(input = {}) {
     timestamp: input.timestamp ?? new Date().toISOString(),
     ambientTemp: Number(input.ambientTemp ?? -20),
     fuelLevel: Number(input.fuelLevel ?? 5000),
-    burnRate: Number(input.burnRate ?? 62.5),
+    burnRate: Number(input.burnRate ?? input.effectiveBurnRate ?? 62.5),
     survivalDays: Number(input.survivalDays ?? 80),
     alertStatus: input.alertStatus ?? "OK",
     generatorFailureActive: Boolean(input.generatorFailureActive ?? false),
@@ -27,12 +27,19 @@ export function normalizeTelemetry(input = {}) {
 }
 
 export async function fetchTelemetry(endpoint, options) {
-  const response = await fetch(endpoint, options);
+  let response;
+  try {
+    response = await fetch(endpoint, options);
+  } catch (networkError) {
+    console.error(`[backendAdapter] Telemetry fetch failed for ${endpoint}:`, networkError);
+    throw new Error(`Telemetry unreachable at ${endpoint}. Is the backend running? (${networkError.message})`);
+  }
   if (!response.ok) throw new Error(`Telemetry request failed: ${response.status}`);
   return normalizeTelemetry(await response.json());
 }
 
-export const BACKEND_SSE_URL = "http://localhost:3001/api/telemetry/stream";
+export const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL || "").replace(/\/$/, "");
+export const BACKEND_SSE_URL = BACKEND_URL ? `${BACKEND_URL}/api/telemetry/stream` : "/api/telemetry/stream";
 
 export function createSSETelemetry(url, onMessage, onError = () => {}) {
   const source = new EventSource(url);
@@ -59,54 +66,62 @@ export function createWebSocketTelemetry(url, onMessage, onError = () => {}) {
   return socket;
 }
 
-const SCENARIO_API_BASE = "http://localhost:3001/api/scenario";
+const SCENARIO_API_BASE = BACKEND_URL ? `${BACKEND_URL}/api/scenario` : "/api/scenario";
+
+/**
+ * Generic scenario request with detailed error diagnostics.
+ * Wraps fetch so that network failures (TypeError: Failed to fetch)
+ * produce an actionable message that includes the exact URL.
+ */
+async function scenarioRequest(path, label) {
+  const url = `${SCENARIO_API_BASE}${path}`;
+  let response;
+  try {
+    console.log(`[backendAdapter] POST ${url}`);
+    response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+  } catch (networkError) {
+    // TypeError: Failed to fetch — server unreachable, CORS blocked, DNS failure, etc.
+    console.error(`[backendAdapter] Network error on POST ${url}:`, networkError);
+    throw new Error(
+      `${label}: Cannot reach backend at ${url}. ` +
+      `Ensure the backend server is running and accessible. (${networkError.message})`
+    );
+  }
+  if (!response.ok) {
+    let body = "";
+    try { body = await response.text(); } catch { /* ignore */ }
+    console.error(`[backendAdapter] ${label} HTTP ${response.status}: ${body}`);
+    throw new Error(`${label}: HTTP ${response.status}${body ? ` — ${body.slice(0, 200)}` : ""}`);
+  }
+  const data = await response.json();
+  console.log(`[backendAdapter] ${label} OK:`, data);
+  return data;
+}
 
 export async function startBlizzard() {
-  const response = await fetch(`${SCENARIO_API_BASE}/blizzard/start`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-  });
-  if (!response.ok) throw new Error(`Blizzard start failed: ${response.status}`);
-  return await response.json();
+  return scenarioRequest("/blizzard/start", "Blizzard start");
 }
 
 export async function stopBlizzard() {
-  const response = await fetch(`${SCENARIO_API_BASE}/blizzard/stop`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-  });
-  if (!response.ok) throw new Error(`Blizzard stop failed: ${response.status}`);
-  return await response.json();
+  return scenarioRequest("/blizzard/stop", "Blizzard stop");
 }
 
 export async function startGeneratorFailure() {
-  const response = await fetch(`${SCENARIO_API_BASE}/generator-failure/start`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-  });
-  if (!response.ok) throw new Error(`Generator failure start failed: ${response.status}`);
-  return await response.json();
+  return scenarioRequest("/generator-failure/start", "Generator failure start");
 }
 
 export async function repairGenerator() {
-  const response = await fetch(`${SCENARIO_API_BASE}/generator-failure/stop`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-  });
-  if (!response.ok) throw new Error(`Generator repair failed: ${response.status}`);
-  return await response.json();
+  return scenarioRequest("/generator-failure/stop", "Generator repair");
 }
 
 export const triggerBlizzard = startBlizzard;
 export const triggerGeneratorFailure = startGeneratorFailure;
 
 export async function resetSimulation() {
-  const response = await fetch(`${SCENARIO_API_BASE}/reset`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-  });
-  if (!response.ok) throw new Error(`Simulation reset failed: ${response.status}`);
-  return await response.json();
+  return scenarioRequest("/reset", "Simulation reset");
 }
 
 

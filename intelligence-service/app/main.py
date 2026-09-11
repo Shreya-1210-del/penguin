@@ -13,13 +13,19 @@ about, real Bharati/Maitri station telemetry.
 """
 from __future__ import annotations
 
+import logging
 import os
+import time
+from collections import defaultdict
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from . import knowledge_base as kb
 from . import physics
@@ -27,22 +33,161 @@ from . import synthetic_data as sd
 from .ml_engine import ResourceIntelligenceEngine
 from .schemas import ChatRequest, PredictRequest, TrainRequest
 
-load_dotenv()  # loads backend/.env if present (PENGUIN_CORS_ORIGINS, OPENAI_API_KEY, OPENAI_MODEL)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+logger = logging.getLogger("penguin.api")
+
+load_dotenv()  # loads .env if present (PENGUIN_CORS_ORIGINS, OPENAI_API_KEY, OPENAI_MODEL)
 
 APP_VERSION = "2.0.0"
+ENVIRONMENT = os.getenv("ENVIRONMENT", os.getenv("NODE_ENV", "production"))
+
+# CORS configuration
+raw_cors = os.getenv("PENGUIN_CORS_ORIGINS", os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173,http://127.0.0.1:3000"))
+origins = [x.strip().rstrip("/") for x in raw_cors.split(",") if x.strip()]
+
+# Trained once at process startup and cached.
+engine = ResourceIntelligenceEngine()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup validation
+    logger.info("[STARTUP] Validating Penguin Intelligence Service configuration...")
+    logger.info("[STARTUP] Version: %s | Environment: %s", APP_VERSION, ENVIRONMENT)
+    logger.info("[STARTUP] CORS Allowed Origins: %s", origins)
+
+    # Validate ML Models
+    if engine.is_ready():
+        logger.info(
+            "[STARTUP] ML Engine: READY (%d resource models loaded, %d synthetic training rows)",
+            len(engine.models),
+            engine.result.rows if engine.result else 0,
+        )
+    else:
+        logger.warning("[STARTUP] ML Engine: INITIALIZED WITH FALLBACK HEURISTICS")
+
+    # Validate Knowledge Base
+    if kb.is_ready():
+        logger.info("[STARTUP] Knowledge Base: READY (%d articles, %d facts)", len(kb.KNOWLEDGE), len(kb.FACTS))
+    else:
+        logger.warning("[STARTUP] Knowledge Base: WARNING (partial or uninitialized knowledge base)")
+
+    # Validate Assistant
+    try:
+        sample_retrieval = kb.retrieve("station fuel")
+        logger.info("[STARTUP] Assistant retrieval pipeline: READY (sample hits=%d)", len(sample_retrieval))
+    except Exception as exc:
+        logger.error("[STARTUP] Assistant retrieval check failed: %s", exc)
+
+    # Validate optional OpenAI LLM integration
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if api_key and api_key.lower() not in ("your_openai_api_key_here", "sk-placeholder", "none", "null") and len(api_key) >= 15:
+        logger.info("[STARTUP] Optional OpenAI LLM integration: ENABLED")
+    else:
+        logger.info("[STARTUP] Optional OpenAI LLM integration: DISABLED (using grounded deterministic local engine)")
+
+    yield
+
+    logger.info("[SHUTDOWN] Penguin Intelligence Service shutting down gracefully.")
+
 
 app = FastAPI(
     title="Penguin Intelligence API",
     version=APP_VERSION,
     description="Resource-demand ML forecasting and the grounded Penguin AI assistant for the Penguin Antarctic Digital Twin prototype.",
+    lifespan=lifespan,
 )
 
-origins = [x.strip() for x in os.getenv("PENGUIN_CORS_ORIGINS", "http://localhost:5173").split(",") if x.strip()]
-app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins if "*" not in origins else ["*"],
+    allow_credentials=True if "*" not in origins else False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
+)
 
-# Trained once at process startup and cached. Only /api/ml/train ever retrains it --
-# never a per-prediction cost (Part 15, performance).
-engine = ResourceIntelligenceEngine()
+# Lightweight in-memory rate limiter (per client IP)
+_client_requests: dict[str, list[float]] = defaultdict(list)
+try:
+    RATE_LIMIT_WINDOW_SEC = max(1.0, float(os.getenv("RATE_LIMIT_WINDOW_SEC", "60.0")))
+except ValueError:
+    RATE_LIMIT_WINDOW_SEC = 60.0
+
+try:
+    RATE_LIMIT_MAX_CALLS = max(1, int(os.getenv("RATE_LIMIT_MAX_CALLS", "120")))
+except ValueError:
+    RATE_LIMIT_MAX_CALLS = 120
+
+
+@app.middleware("http")
+async def security_and_rate_limit_middleware(request: Request, call_next):
+    client_ip = request.client.host if request.client else "unknown"
+    now = time.time()
+
+    # Rate limit check (exclude health checks)
+    if not request.url.path.startswith(("/health", "/api/health")):
+        timestamps = [t for t in _client_requests[client_ip] if now - t < RATE_LIMIT_WINDOW_SEC]
+        timestamps.append(now)
+        _client_requests[client_ip] = timestamps
+        if len(timestamps) > RATE_LIMIT_MAX_CALLS:
+            return JSONResponse(
+                status_code=429,
+                content={"detail": f"Rate limit exceeded. Maximum {RATE_LIMIT_MAX_CALLS} requests per minute."},
+                headers={"Retry-After": "60"},
+            )
+
+        # Cleanup client requests memory periodically
+        if len(_client_requests) > 500:
+            stale = [k for k, v in _client_requests.items() if not v or (now - v[-1] > RATE_LIMIT_WINDOW_SEC)]
+            for k in stale:
+                _client_requests.pop(k, None)
+
+    try:
+        response: Response = await call_next(request)
+    except Exception as exc:
+        logger.error("Unhandled error in request pipeline (%s): %s", request.url.path, exc, exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Internal server error occurred in Penguin Intelligence service."},
+        )
+
+    # Attach secure headers
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "geolocation=(), camera=(), microphone=()"
+    return response
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": "Request validation failed",
+            "errors": [{"field": ".".join(str(loc) for loc in err["loc"]), "message": err["msg"]} for err in exc.errors()],
+        },
+    )
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers=exc.headers,
+    )
+
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    logger.error("Unhandled exception: %s", exc, exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error occurred in Penguin Intelligence service."},
+    )
+
 
 
 # ---------------------------------------------------------------------------
@@ -167,6 +312,7 @@ def _human_explanation(top_factors: list[dict], req: PredictRequest) -> str:
 # Existing endpoints (kept backward compatible; response fields only ever added to)
 # ---------------------------------------------------------------------------
 
+@app.get("/health")
 @app.get("/api/health")
 def health() -> dict[str, Any]:
     return {
@@ -175,20 +321,57 @@ def health() -> dict[str, Any]:
         "version": APP_VERSION,
         "utc": datetime.now(timezone.utc).isoformat(),
         "model_rows": engine.result.rows if engine.result else 0,
+        "models_loaded": bool(engine.models),
+        "knowledge_base_loaded": len(kb.KNOWLEDGE) > 0,
     }
+
+
+@app.get("/health/live")
+@app.get("/api/health/live")
+def health_live() -> dict[str, Any]:
+    """Liveness probe: verifies process is responding."""
+    return {"status": "alive", "service": "penguin-intelligence", "timestamp": datetime.now(timezone.utc).isoformat()}
+
+
+@app.get("/health/ready")
+@app.get("/api/health/ready")
+def health_ready() -> dict[str, Any]:
+    """Readiness probe: verifies ML models, knowledge base, and assistant pipeline are ready to serve."""
+    models_ready = bool(engine.is_ready())
+    kb_ready = bool(kb.is_ready())
+    assistant_ready = kb.retrieve("test question") is not None
+
+    all_ready = models_ready and kb_ready and assistant_ready
+    status_code = 200 if all_ready else 503
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "status": "ready" if all_ready else "not_ready",
+            "service": "penguin-intelligence",
+            "version": APP_VERSION,
+            "components": {
+                "fastapi_running": True,
+                "ml_models_loaded": models_ready,
+                "knowledge_base_loaded": kb_ready,
+                "assistant_available": assistant_ready,
+            },
+            "model_resources": list(engine.models.keys()) if engine.models else list(sd.RESOURCE_NAMES),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    )
 
 
 @app.get("/api/ml/model-info")
 def model_info() -> dict[str, Any]:
-    assert engine.result is not None
+    res = engine.result
     return {
         "model": "RandomForestRegressor ensemble (one model per resource)",
         "resources": sd.RESOURCE_NAMES,
         "features": sd.FEATURE_NAMES,
-        "synthetic_rows": engine.result.rows,
-        "seed": engine.result.seed,
+        "synthetic_rows": res.rows if res else 0,
+        "seed": res.seed if res else 0,
         "version": APP_VERSION,
-        "feature_importance": {k: v for k, v in engine.result.feature_importance.items()},
+        "feature_importance": {k: v for k, v in res.feature_importance.items()} if res else {},
         "aggregate_feature_importance": engine.aggregate_feature_importance(),
         "data_disclaimer": "SYNTHETIC PROTOTYPE DATA -- not real Bharati/Maitri telemetry.",
     }
@@ -322,9 +505,9 @@ def metrics() -> dict[str, Any]:
 
 @app.get("/api/ml/feature-importance")
 def feature_importance() -> dict[str, Any]:
-    assert engine.result is not None
+    res = engine.result
     return {
-        "per_resource": engine.result.feature_importance,
+        "per_resource": res.feature_importance if res else {},
         "aggregate": engine.aggregate_feature_importance(),
         "note": "Derived directly from trained RandomForestRegressor.feature_importances_, not hand-assigned.",
     }

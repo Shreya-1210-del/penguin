@@ -18,12 +18,15 @@ import { detectWeatherEvents, getInitialHistoricalEvents, mergeWeatherEvents } f
 import RiskPanel from "./RiskPanel.jsx";
 import MissionStatusPanel from "./MissionStatusPanel.jsx";
 import MissionOpsCenter from "./MissionOpsCenter.jsx";
+import ResourcePredictorML from "./src/penguin-intelligence/ResourcePredictorML.jsx";
+import PenguinAIAssistant from "./src/penguin-intelligence/PenguinAIAssistant.jsx";
 
 
 function Metric({ icon: Icon, label, value }) { return <div className="strip-metric"><Icon size={20}/><div><span>{label}</span><b>{value}</b><small>LIVE</small></div></div>; }
 function StateRow({ label, value }) { const tone = value === "CRITICAL" ? "critical" : value === "WARNING" || value === "ACTIVE" ? "warning" : "ok"; return <div className="state-row"><span><i className={tone}/>{label}</span><b className={tone}>{value}</b></div>; }
 
 const featureButtons = [
+  { id: "resource-ml", title: "ML Resource Intelligence", desc: "FastAPI RandomForest ensemble predicting fuel, risk, and resource demand under extreme Antarctic conditions.", icon: BrainCircuit },
   { id: "fuel-engine", title: "Dynamic Fuel & Physics", desc: "3-second mock physics loop using the documented cold multiplier, generator count, scenario penalty and 120,000 L reserve.", icon: FuelIcon },
   { id: "station-map", title: "Interactive 2D Station Map", desc: "Click Generator Bay, Fuel Storage or Living Quarters. Hover for distance and inspect live state.", icon: MapPin },
   { id: "scenario", title: "Emergency What-If Simulator", desc: "Run Blizzard Level 5, Primary Generator Failure and reset scenarios with cascading effects.", icon: Siren },
@@ -155,7 +158,7 @@ function App() {
   return <div className="app-shell"><div className="scanlines"/>
     <header className="topbar">
       <div className="brand"><div className="penguin-mark"><div className="penguin-head"><span/></div><div className="penguin-body"><i/><i/></div></div><div><div className="brand-name">PENGUIN</div><div className="brand-sub">ANTARCTIC DIGITAL TWIN</div></div></div>
-      <nav className={`nav-links ${menuOpen ? "open" : ""}`}><button onClick={() => nav("overview")}>OVERVIEW</button><button onClick={() => { setMenuOpen(false); setFeaturesOpen(true); }}>FEATURES</button><button onClick={() => nav("telemetry")}>TELEMETRY</button><button onClick={() => nav("digital-twin")}>DIGITAL TWIN</button><button onClick={() => nav("satsync")}>SATSYNC</button></nav>
+      <nav className={`nav-links ${menuOpen ? "open" : ""}`}><button onClick={() => nav("overview")}>OVERVIEW</button><button onClick={() => { setMenuOpen(false); setFeaturesOpen(true); }}>FEATURES</button><button onClick={() => nav("telemetry")}>TELEMETRY</button><button onClick={() => nav("digital-twin")}>DIGITAL TWIN</button><button onClick={() => nav("resource-ml")}>ML INTELLIGENCE</button><button onClick={() => nav("satsync")}>SATSYNC</button></nav>
       <div className="top-actions"><div className="live-badge"><i/> LIVE STATUS</div><button className="features-btn" onClick={() => setFeaturesOpen(true)}><Layers3 size={15}/> FEATURES</button><button className="payload-btn" onClick={() => setPayloadOpen(true)}><Code2 size={15}/> INSPECT</button><button className="menu-btn" onClick={() => setMenuOpen(!menuOpen)} aria-label="Menu">{menuOpen ? <X/> : <Menu/>}</button></div>
     </header>
 
@@ -187,6 +190,7 @@ function App() {
 
       <SatSyncCard engine={engine}/>
       <section className="advanced-grid"><div id="analytics"><PredictiveAnalytics history={engine.history} currentFuel={engine.currentFuel} burnRate={engine.dailyBurnRate} ambientTemp={engine.ambientTemp} activeScenarios={engine.activeScenarios} survivalDays={engine.survivalDays}/></div><div id="orbit"><SatelliteOrbit satSync={engine.isSatSyncMode}/></div></section>
+      <ResourcePredictorML engine={engine} />
       <div id="logistics"><ResourceLogistics/></div>
       <section className="panel backend-ready" id="backend"><div className="panel-head"><div><span className="eyebrow">BACKEND-READY ARCHITECTURE</span><h2>Integration contract</h2></div><Code2 size={18} className="blue-icon"/></div><div className="backend-contract"><div><span>TELEMETRY</span><b>REST / WebSocket / MQTT adapter boundary</b></div><div><span>WEATHER</span><b>Open-Meteo / IMD model integration point</b></div><div><span>STATION IO</span><b>BMS / BACnet-IP / SCADA telemetry boundary</b></div><div><span>TIME SERIES</span><b>InfluxDB-ready storage contract</b></div></div></section>
       <section className="field-gallery" id="stations"><div className="gallery-head"><div><span className="eyebrow">FIELD IMAGERY / REAL STATIONS</span><h2>India's Antarctic footprint</h2></div><span className="gallery-note">Remote image sources use NCPOR URLs with local fallback assets.</span></div><div className="gallery-3d-scene"><PhotoCard station={stations.MAITRI} code="STN-01"/><PhotoCard station={stations.BHARATI} code="STN-02"/><PhotoCard station={stations.BHARATI} code="STN-02 / FIELD"/></div></section>
@@ -194,6 +198,7 @@ function App() {
     </main>
 
     <DemoControls engine={engine}/>
+    <PenguinAIAssistant engine={engine}/>
     {featuresOpen && <FeatureMenu onClose={() => setFeaturesOpen(false)} nav={nav} openPayload={() => { setFeaturesOpen(false); setPayloadOpen(true); }} />}
     {payloadOpen && <div className="modal-backdrop" onClick={() => setPayloadOpen(false)}><div className="modal payload-modal" onClick={(e) => e.stopPropagation()}><button className="icon-btn modal-close" onClick={() => setPayloadOpen(false)}><X/></button><div className="modal-kicker"><Code2 size={15}/> PAYLOAD INSPECTOR</div><h3>Active transmission payload</h3><div className="inspect-tabs"><span className={!engine.isSatSyncMode ? "active" : ""}>LOCAL {metrics.rawBytes} B</span><span className={engine.isSatSyncMode ? "active" : ""}>SATSYNC {metrics.compressedBytes} B</span></div><pre>{engine.isSatSyncMode ? compressedPayload : rawPayload}</pre><div className="inspect-footer"><span>simulated bandwidth reduction</span><b>{metrics.reduction.toFixed(2)}%</b></div></div></div>}
   </div>;

@@ -111,11 +111,11 @@ export default function ResourcePredictorML({ engine }) {
 
   const payload = useMemo(() => ({
     ...controls,
-    ambient_temp_c: Number(engine?.ambientTemp ?? controls.ambient_temp_c),
-    power_load_kw: Number(engine?.powerLoadKW ?? controls.power_load_kw),
-    fuel_percent: Number(
+    ambient_temp_c: Math.round(Number(engine?.ambientTemp ?? controls.ambient_temp_c)),
+    power_load_kw: Math.round(Number(engine?.powerLoadKW ?? controls.power_load_kw) / 10) * 10,
+    fuel_percent: Math.round(Number(
       engine?.currentFuel ? (engine.currentFuel / (engine.fuelTankCapacity || 120000)) * 100 : controls.fuel_percent
-    ),
+    )),
     scenario: engine?.scenario || controls.scenario,
   }), [controls, engine]);
 
@@ -132,7 +132,7 @@ export default function ResourcePredictorML({ engine }) {
       if (!isCurrent(id)) return;
       setError(
         e?.message === "PENGUIN_API_UNREACHABLE"
-          ? "Backend unavailable. Start the FastAPI intelligence service on port 8000."
+          ? "Penguin intelligence service is currently unreachable. Please check backend connectivity."
           : `Prediction failed: ${e.message}`
       );
     } finally {

@@ -8,9 +8,10 @@ import {
   startGeneratorFailure as apiStartGenFailure,
   repairGenerator as apiRepairGenerator,
   resetSimulation as apiResetSimulation,
+  BACKEND_URL,
 } from "./backendAdapter.js";
 
-const BACKEND_TELEMETRY_URL = "http://localhost:3001/api/telemetry";
+const BACKEND_TELEMETRY_URL = BACKEND_URL ? `${BACKEND_URL}/api/telemetry` : "/api/telemetry";
 const BACKEND_POLL_MS = 2000;
 
 export const BASE_FUEL_LITERS = 120000;
@@ -55,11 +56,15 @@ export function useAntarcticEngine() {
   const generatorStatus = generatorFailureActive ? "CRITICAL" : "NORMAL";
 
   const scenario = useMemo(() => {
-    if (generatorFailureActive && ambientTemp <= -40) return "COMBINED";
-    if (generatorFailureActive) return "GENERATOR_FAILURE";
-    if (ambientTemp <= -35) return "BLIZZARD";
+    const isBlizzard = activeScenarios?.blizzard !== undefined
+      ? Boolean(activeScenarios.blizzard)
+      : ambientTemp <= -35;
+    const isGenFailure = Boolean(activeScenarios?.generatorFailure || generatorFailureActive);
+    if (isGenFailure && isBlizzard) return "COMBINED";
+    if (isGenFailure) return "GENERATOR_FAILURE";
+    if (isBlizzard) return "BLIZZARD";
     return "NORMAL";
-  }, [generatorFailureActive, ambientTemp]);
+  }, [activeScenarios, generatorFailureActive, ambientTemp]);
 
 
   const scenarioPenaltyMultiplier = useMemo(() => {
@@ -110,7 +115,9 @@ export function useAntarcticEngine() {
       setActiveScenarios(data.activeScenarios);
     }
 
-    const isBlizzard = Boolean(data.activeScenarios?.blizzard || data.ambientTemp <= -35);
+    const isBlizzard = data.activeScenarios?.blizzard !== undefined
+      ? Boolean(data.activeScenarios.blizzard)
+      : Boolean(data.ambientTemp <= -35);
     const isGenFailure = Boolean(data.activeScenarios?.generatorFailure || data.generatorFailureActive);
     let currentScenario = "NORMAL";
     if (isGenFailure && (isBlizzard || data.ambientTemp <= -40)) {
@@ -246,10 +253,16 @@ export function useAntarcticEngine() {
     setScenarioLoading(true);
     setScenarioError(null);
     try {
+      console.time('Engine_apiStartBlizzard');
       const res = await apiStartBlizzard();
+      console.timeEnd('Engine_apiStartBlizzard');
+      if (res?.state) {
+        console.time('Engine_applyTelemetryUpdate');
+        applyTelemetryUpdate(normalizeTelemetry(res.state));
+        console.timeEnd('Engine_applyTelemetryUpdate');
+      }
       setScenarioMessage("Blizzard Activated");
       addLog("SCENARIO: Blizzard Level 5 (-55°C) started on backend.", "warning");
-      await pollTelemetry().catch(() => {});
       return res;
     } catch (err) {
       setScenarioError(err.message);
@@ -258,16 +271,18 @@ export function useAntarcticEngine() {
     } finally {
       setScenarioLoading(false);
     }
-  }, [addLog, pollTelemetry]);
+  }, [addLog, applyTelemetryUpdate]);
 
   const stopBlizzard = useCallback(async () => {
     setScenarioLoading(true);
     setScenarioError(null);
     try {
       const res = await apiStopBlizzard();
+      if (res?.state) {
+        applyTelemetryUpdate(normalizeTelemetry(res.state));
+      }
       setScenarioMessage("Blizzard Stopped");
       addLog("SCENARIO: Blizzard stopped on backend. Temperature returning to baseline.", "success");
-      await pollTelemetry().catch(() => {});
       return res;
     } catch (err) {
       setScenarioError(err.message);
@@ -276,7 +291,7 @@ export function useAntarcticEngine() {
     } finally {
       setScenarioLoading(false);
     }
-  }, [addLog, pollTelemetry]);
+  }, [addLog, applyTelemetryUpdate]);
 
   const toggleBlizzard = useCallback(async () => {
     if (activeScenarios.blizzard) {
@@ -291,9 +306,11 @@ export function useAntarcticEngine() {
     setScenarioError(null);
     try {
       const res = await apiStartGenFailure();
+      if (res?.state) {
+        applyTelemetryUpdate(normalizeTelemetry(res.state));
+      }
       setScenarioMessage("Generator Failure Activated");
       addLog("SCENARIO: Primary generator failure activated on backend (1.5x burn rate).", "danger");
-      await pollTelemetry().catch(() => {});
       return res;
     } catch (err) {
       setScenarioError(err.message);
@@ -302,16 +319,18 @@ export function useAntarcticEngine() {
     } finally {
       setScenarioLoading(false);
     }
-  }, [addLog, pollTelemetry]);
+  }, [addLog, applyTelemetryUpdate]);
 
   const repairGenerator = useCallback(async () => {
     setScenarioLoading(true);
     setScenarioError(null);
     try {
       const res = await apiRepairGenerator();
+      if (res?.state) {
+        applyTelemetryUpdate(normalizeTelemetry(res.state));
+      }
       setScenarioMessage("Generator Repaired");
       addLog("SCENARIO: Primary generator repaired on backend. Fleet nominal.", "success");
-      await pollTelemetry().catch(() => {});
       return res;
     } catch (err) {
       setScenarioError(err.message);
@@ -320,7 +339,7 @@ export function useAntarcticEngine() {
     } finally {
       setScenarioLoading(false);
     }
-  }, [addLog, pollTelemetry]);
+  }, [addLog, applyTelemetryUpdate]);
 
   const toggleGeneratorFailure = useCallback(async () => {
     if (activeScenarios.generatorFailure) {

@@ -281,44 +281,51 @@ def _explain_risk_from_context(context: dict[str, Any]) -> str | None:
     return "Based on the current simulated state, risk is elevated because " + "; and ".join(reasons) + "."
 
 
+def is_ready() -> bool:
+    try:
+        return len(KNOWLEDGE) > 0 and len(FACTS) > 0 and _vectorizer is not None and _KB_MATRIX is not None
+    except Exception:
+        return False
+
+
 def try_llm_answer(question: str, context: dict[str, Any], knowledge_snippets: list[dict]) -> str | None:
     """Optional production LLM path. Guarded entirely behind OPENAI_API_KEY.
-    Returns None (never raises) if the key is absent or the call fails for any reason,
+    Returns None (never raises) if the key is absent, dummy, or the call fails for any reason,
     so the caller always has a deterministic local fallback available."""
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    if not api_key:
+    if not api_key or api_key.lower() in ("your_openai_api_key_here", "sk-placeholder", "none", "null") or len(api_key) < 15:
         return None
     model = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
-    grounding = "\n".join(f"- {item['text']}" for item in knowledge_snippets) or "(no matching knowledge base entries)"
-    system_prompt = (
-        "You are Penguin AI, an assistant embedded in a prototype Antarctic digital twin dashboard "
-        "for India's Bharati and Maitri stations. Answer simply, for a non-technical user. "
-        "Only use the grounding notes and dashboard context given below; if asked for real/actual/classified "
-        "station telemetry, say plainly that this prototype only has synthetic data. "
-        f"Grounding notes:\n{grounding}\nCurrent dashboard context: {json.dumps(context)}"
-    )
-    body = json.dumps(
-        {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": question},
-            ],
-            "temperature": 0.3,
-            "max_tokens": 300,
-        }
-    ).encode("utf-8")
-    req = urllib.request.Request(
-        "https://api.openai.com/v1/chat/completions",
-        data=body,
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
-        method="POST",
-    )
     try:
-        with urllib.request.urlopen(req, timeout=8) as resp:
+        grounding = "\n".join(f"- {item['text']}" for item in knowledge_snippets) or "(no matching knowledge base entries)"
+        system_prompt = (
+            "You are Penguin AI, an assistant embedded in a prototype Antarctic digital twin dashboard "
+            "for India's Bharati and Maitri stations. Answer simply, for a non-technical user. "
+            "Only use the grounding notes and dashboard context given below; if asked for real/actual/classified "
+            "station telemetry, say plainly that this prototype only has synthetic data. "
+            f"Grounding notes:\n{grounding}\nCurrent dashboard context: {json.dumps(context)}"
+        )
+        body = json.dumps(
+            {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": question},
+                ],
+                "temperature": 0.3,
+                "max_tokens": 300,
+            }
+        ).encode("utf-8")
+        req = urllib.request.Request(
+            "https://api.openai.com/v1/chat/completions",
+            data=body,
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
             return payload["choices"][0]["message"]["content"].strip()
-    except (urllib.error.URLError, KeyError, IndexError, ValueError, TimeoutError):
+    except Exception:
         return None
 
 

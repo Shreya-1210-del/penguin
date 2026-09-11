@@ -68,7 +68,7 @@ export default function PenguinAIAssistant({ engine }) {
       if (r.suggested_questions?.length) setSuggested(r.suggested_questions);
     } catch (e) {
       setConnectionError(true);
-      setMessages((m) => [...m, { role: "assistant", text: "I can't reach the Penguin intelligence backend right now. Start FastAPI on port 8000 and try again.", isError: true }]);
+      setMessages((m) => [...m, { role: "assistant", text: "I can't reach the Penguin intelligence service right now. Please check backend connectivity and try again.", isError: true }]);
     } finally {
       setBusy(false);
     }
@@ -90,7 +90,7 @@ export default function PenguinAIAssistant({ engine }) {
       }]);
     } catch {
       setConnectionError(true);
-      setMessages((m) => [...m, { role: "assistant", text: "Couldn't reach the recommendation engine. Start FastAPI on port 8000 and try again.", isError: true }]);
+      setMessages((m) => [...m, { role: "assistant", text: "Couldn't reach the recommendation service right now. Please check backend connectivity and try again.", isError: true }]);
     } finally {
       setBusy(false);
     }

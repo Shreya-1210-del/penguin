@@ -1,9 +1,11 @@
-const API = import.meta.env.VITE_PENGUIN_API_URL || import.meta.env.VITE_INTELLIGENCE_API_URL || "http://127.0.0.1:8000";
+const rawApi = import.meta.env.VITE_PENGUIN_API_URL || import.meta.env.VITE_INTELLIGENCE_API_URL || "";
+const API = rawApi ? rawApi.replace(/\/$/, "") : "";
 
 async function request(path, options = {}) {
   let response;
+  const url = `${API}${path}`;
   try {
-    response = await fetch(`${API}${path}`, {
+    response = await fetch(url, {
       headers: { "Content-Type": "application/json", ...(options.headers || {}) },
       ...options,
     });

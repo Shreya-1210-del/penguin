@@ -4,4 +4,8 @@ intelligence-service/__pycache__/
 intelligence-service/**/__pycache__/
 *.pyc
 .env
-node_modules
+.env.local
+.env.*.local
+node_modules/
+dist/
+

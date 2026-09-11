@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .physics import Scenario, Station
 
@@ -26,14 +26,32 @@ class PredictRequest(BaseModel):
 
 
 class TrainRequest(BaseModel):
-    rows: int = Field(1500, ge=300, le=10000)
+    rows: int = Field(1500, ge=100, le=10000)
     seed: int = Field(42, ge=0, le=100000)
 
 
 class ChatRequest(BaseModel):
-    message: str
-    context: Optional[Dict[str, Any]] = None
+    message: str = Field(..., min_length=1, max_length=2000, description="User question (sanitized, 1-2000 chars)")
+    context: Optional[Dict[str, Any]] = Field(default=None, description="Optional dashboard state context")
+
+    @field_validator("message")
+    @classmethod
+    def sanitize_message(cls, v: str) -> str:
+        # Strip null bytes and normalize whitespace
+        sanitized = v.replace("\x00", "").strip()
+        if not sanitized:
+            raise ValueError("message must not be empty or whitespace-only")
+        return sanitized
 
 
 class FactsQuery(BaseModel):
-    category: Optional[str] = None
+    category: Optional[str] = Field(default=None, max_length=100)
+
+    @field_validator("category")
+    @classmethod
+    def sanitize_category(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        sanitized = v.replace("\x00", "").strip()
+        return sanitized or None
+

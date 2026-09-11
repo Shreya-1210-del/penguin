@@ -15,15 +15,15 @@ export default function DemoControls({
   const [error, setError] = useState(null);
 
   const isBlizzardActive = Boolean(
-    engine?.activeScenarios?.blizzard ||
-    engine?.scenario === "BLIZZARD" ||
-    engine?.scenario === "COMBINED"
+    engine?.activeScenarios?.blizzard !== undefined
+      ? engine.activeScenarios.blizzard
+      : (engine?.scenario === "BLIZZARD" || engine?.scenario === "COMBINED")
   );
 
   const isGenFailureActive = Boolean(
-    engine?.activeScenarios?.generatorFailure ||
-    engine?.generatorFailureActive ||
-    engine?.generatorStatus === "CRITICAL"
+    engine?.activeScenarios?.generatorFailure !== undefined
+      ? engine.activeScenarios.generatorFailure
+      : (engine?.generatorFailureActive || engine?.generatorStatus === "CRITICAL")
   );
 
   const blizzardStartAction = startBlizzard || engine?.startBlizzard || engine?.triggerBlizzard;
@@ -43,15 +43,19 @@ export default function DemoControls({
 
   const handleAction = async (actionFn, actionName, successMsg) => {
     if (loadingAction || !actionFn) return;
+    console.time(`DemoControls_${actionName}_Total`);
     setLoadingAction(actionName);
     setError(null);
     try {
+      console.time(`DemoControls_${actionName}_ActionFn`);
       await actionFn();
+      console.timeEnd(`DemoControls_${actionName}_ActionFn`);
       setFeedback(successMsg);
     } catch (err) {
       setError(err?.message || `${actionName} failed`);
     } finally {
       setLoadingAction(null);
+      console.timeEnd(`DemoControls_${actionName}_Total`);
     }
   };
 
