@@ -4,6 +4,7 @@ const API = API_BASE.replace(/\/$/, "");
 async function request(path, options = {}) {
   let response;
   const url = `${API}${path}`;
+  console.log("API URL:", url);
   try {
     response = await fetch(url, {
       headers: { "Content-Type": "application/json", ...(options.headers || {}) },
@@ -12,12 +13,23 @@ async function request(path, options = {}) {
   } catch (networkError) {
     throw new Error("PENGUIN_API_UNREACHABLE");
   }
+
+  console.log("Status:", response.status);
+
   if (!response.ok) {
-    let detail = "";
-    try { detail = (await response.json())?.detail || ""; } catch { /* ignore */ }
-    throw new Error(detail || `Penguin API ${response.status}`);
+    const text = await response.text();
+    console.log("Body:", text);
+    throw new Error(`HTTP ${response.status}: ${text}`);
   }
-  return response.json();
+
+  const text = await response.text();
+  console.log("Body:", text);
+
+  if (!text || text.trim() === "") {
+    throw new Error("Backend returned empty response");
+  }
+
+  return JSON.parse(text);
 }
 
 // Existing (kept stable for backward compatibility)
